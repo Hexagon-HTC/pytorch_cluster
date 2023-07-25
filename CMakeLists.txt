@@ -1,88 +1,61 @@
-cmake_minimum_required(VERSION 3.0)
-project(torchcluster)
-set(CMAKE_CXX_STANDARD 14)
-set(TORCHCLUSTER_VERSION 1.6.1)
+cmake_minimum_required(VERSION 3.1 FATAL_ERROR)
+project(torch_cluster_operators LANGUAGES CXX CUDA)
 
-option(WITH_CUDA "Enable CUDA support" OFF)
-option(WITH_PYTHON "Link to Python when building" ON)
-
-if(WITH_CUDA)
-  enable_language(CUDA)
-  add_definitions(-D__CUDA_NO_HALF_OPERATORS__)
-  add_definitions(-DWITH_CUDA)
-  set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-relaxed-constexpr")
-endif()
-
-if (WITH_PYTHON)
-  add_definitions(-DWITH_PYTHON)
-  find_package(Python3 COMPONENTS Development)
-endif()
 find_package(Torch REQUIRED)
+find_package(CUDA REQUIRED)
 
-file(GLOB HEADERS csrc/*.h)
-file(GLOB OPERATOR_SOURCES csrc/*.* csrc/cpu/*.*)
-if(WITH_CUDA)
-  file(GLOB OPERATOR_SOURCES ${OPERATOR_SOURCES} csrc/cuda/*.h csrc/cuda/*.cu)
+# Define our library target
+set(HEADERS
+init.h
+)
+
+set(SOURCES
+fps.cpp
+init.cpp
+knn.cpp
+)
+
+set(CUDA_SOURCES
+atomics.cuh
+compat.cuh
+fps_kernel.cu
+knn_kernel.cu
+utils.cuh
+)
+
+add_library(torch_cluster_operators SHARED ${HEADERS} ${SOURCES} ${CUDA_SOURCES})
+
+# Custom flags
+if(MSVC)
+    set(CMAKE_CUDA_FLAGS "-Xcompiler=\"/EHsc /wd4267 /wd4251 /wd4522 /wd4838 /wd4305 /wd4244 /wd4190 /wd4101 /wd4996 /wd4275 /bigobj\"")
 endif()
 
-add_library(${PROJECT_NAME} SHARED ${OPERATOR_SOURCES})
-target_link_libraries(${PROJECT_NAME} PRIVATE ${TORCH_LIBRARIES})
-if (WITH_PYTHON)
-  target_link_libraries(${PROJECT_NAME} PRIVATE Python3::Python)
-endif()
-set_target_properties(${PROJECT_NAME} PROPERTIES EXPORT_NAME TorchCluster)
+# Enable C++14
+target_compile_features(torch_cluster_operators PRIVATE cxx_range_for)
+target_compile_features(torch_cluster_operators PUBLIC cxx_std_14)
 
-target_include_directories(${PROJECT_NAME} INTERFACE
-  $<BUILD_INTERFACE:${HEADERS}>
-  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+# Link against LibTorch
+target_link_libraries(torch_cluster_operators torch cuda)
 
-include(GNUInstallDirs)
-include(CMakePackageConfigHelpers)
-
-set(TORCHCLUSTER_CMAKECONFIG_INSTALL_DIR "share/cmake/TorchCluster" CACHE STRING "install path for TorchClusterConfig.cmake")
-
-configure_package_config_file(cmake/TorchClusterConfig.cmake.in
-  "${CMAKE_CURRENT_BINARY_DIR}/TorchClusterConfig.cmake"
-  INSTALL_DESTINATION ${TORCHCLUSTER_CMAKECONFIG_INSTALL_DIR})
-
-write_basic_package_version_file(${CMAKE_CURRENT_BINARY_DIR}/TorchClusterConfigVersion.cmake
-  VERSION ${TORCHCLUSTER_VERSION}
-  COMPATIBILITY AnyNewerVersion)
-
-install(FILES ${CMAKE_CURRENT_BINARY_DIR}/TorchClusterConfig.cmake
-  ${CMAKE_CURRENT_BINARY_DIR}/TorchClusterConfigVersion.cmake
-  DESTINATION ${TORCHCLUSTER_CMAKECONFIG_INSTALL_DIR})
-
-install(TARGETS ${PROJECT_NAME}
-  EXPORT TorchClusterTargets
-  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-  )
-
-install(EXPORT TorchClusterTargets
-  NAMESPACE TorchCluster::
-  DESTINATION ${TORCHCLUSTER_CMAKECONFIG_INSTALL_DIR})
-
-install(FILES ${HEADERS} DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/${PROJECT_NAME})
-install(FILES
-  csrc/cpu/fps_cpu.h
-  csrc/cpu/graclus_cpu.h
-  csrc/cpu/grid_cpu.h
-  csrc/cpu/rw_cpu.h
-  csrc/cpu/sampler_cpu.h
-  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/${PROJECT_NAME}/cpu)
-if(WITH_CUDA)
-  install(FILES
-    csrc/cuda/fps_cuda.h
-    csrc/cuda/graclus_cuda.h
-    csrc/cuda/grid_cuda.h
-    csrc/cuda/knn_cuda.h
-    csrc/cuda/nearest_cuda.h
-    csrc/cuda/radius_cuda.h
-    csrc/cuda/rw_cuda.h
-    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/${PROJECT_NAME}/cuda)
+if(${CMAKE_VERSION} GREATER_EQUAL "3.18")
+    set_property(TARGET torch_cluster_operators PROPERTY CUDA_ARCHITECTURES 50 52 60 61 70 75 80 86)
 endif()
 
-if(WITH_CUDA)
-  set_property(TARGET torch_cuda PROPERTY INTERFACE_COMPILE_OPTIONS "")
-  set_property(TARGET torch_cpu PROPERTY INTERFACE_COMPILE_OPTIONS "")
-endif()
+if (MSVC)
+    foreach( OUTPUTCONFIG ${CMAKE_CONFIGURATION_TYPES} )
+        install(TARGETS torch_cluster_operators EXPORT torch_cluster_operators
+            ARCHIVE DESTINATION lib/${OUTPUTCONFIG}
+            LIBRARY DESTINATION lib/${OUTPUTCONFIG}
+            RUNTIME DESTINATION bin/${OUTPUTCONFIG})
+
+        install(FILES $<TARGET_PDB_FILE:torch_cluster_operators> DESTINATION lib/${OUTPUTCONFIG} OPTIONAL)
+
+        install(EXPORT torch_cluster_operators DESTINATION lib/cmake/torch_cluster_operators FILE torch_cluster_operators-config.cmake)
+    endforeach( OUTPUTCONFIG CMAKE_CONFIGURATION_TYPES )
+else()
+    install(TARGETS torch_cluster_operators EXPORT torch_cluster_operators
+        ARCHIVE DESTINATION lib/torch_cluster_operators
+        LIBRARY DESTINATION lib/torch_cluster_operators
+        RUNTIME DESTINATION bin/torch_cluster_operators)
+    install(EXPORT torch_cluster_operators DESTINATION lib/cmake/torch_cluster_operators FILE torch_cluster_operators-config.cmake)
+endif(MSVC)
